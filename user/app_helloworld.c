@@ -12,6 +12,6 @@
 
 int main(void) {
   printu("Hello world!\n");
-
+  printu("Hello world!\n");
   exit(0);
 }
