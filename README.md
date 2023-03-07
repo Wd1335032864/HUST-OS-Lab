@@ -289,4 +289,4 @@ void switch_to(process* proc) {
 随后调用ecall陷入内核，根据文档我们知道sscratch指向S模式下的栈顶指针，所以可以认为操作系统的内核栈就是sscratch指向地址为首地址的一段存储空间，而根据strap_vector.S中return_to_user的定义可知在进入S态前，sscratch 指向当前进程的trapframe。所以此时保存上下文到trapframe中时，也就是保存到了操作系统的内核栈。最重要的来了，ld sp, 248(a0)，让sp指向用户内核栈，到此栈的切换完成。至于文档里说到的将**使用应用进程所附带的内核栈来保存执行的上下文**，我认为是此时的trapfram算是用户内核栈里的数据了。
 
 附图：
-![image-20230307144220866](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\image-20230307144220866.png)
+![image-20230307145655111](../../AppData/Roaming/Typora/typora-user-images/image-20230307145655111.png)
