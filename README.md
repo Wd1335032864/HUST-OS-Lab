@@ -108,3 +108,7 @@
   ```
 
 - 而其函数具体定义也已经在mtrap.c中实现好，所以到此实验完成。
+
+
+
+对于stack0和mscratch可自行查看mentry.S和minit.c理解。大致上mscratch可以对比sscrath理解，而stack0也是出于保护作用。
