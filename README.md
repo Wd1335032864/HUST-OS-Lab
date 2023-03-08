@@ -1,4 +1,4 @@
-# lab1_2_exception
+lab1_2_exception
 
 - 首先继承lab1_1_syscall的答案
 
@@ -112,3 +112,7 @@
 
 
 对于stack0和mscratch可自行查看mentry.S和minit.c理解。大致上mscratch可以对比sscrath理解，而stack0也是出于保护作用。
+
+# 记录
+
+对于exception，系统并没有做epc+4处理。这就是exception和trap的一个区别，trap返回地址为下一条指令的地址，而excepiton返回发生异常指令的地址。
