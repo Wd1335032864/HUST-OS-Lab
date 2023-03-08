@@ -1,222 +1,94 @@
-## about riscv-pke (Proxy Kernel for Education, a.k.a. PKE) ##
-----------
+# lab1_challenge1_backtrace
 
-Documents in Chinese can be found [here](https://gitee.com/hustos/pke-doc). There is still no dedicated documents in English yet, but the in-line comments in our codes as well as the self-explaining names for variables and functions will help on your journey of PKE.
-
-PKE is an open source project (see [LICENSE.txt](./LICENSE.txt) for license information) for the educational purpose of the Operating System Engineering/Computer System Engineering courses, given to undergraduate students majored in CS (Computer Science) or EECS ( Electrical Engineering and Computer Science) in universities.
-
-PKE provides a series of labs that cover the engineering-side knowledge points of the Operating System as well as some of Computer Organization/Architecture, including:
-
-Lab1(3 basic labs+2 challenge labs): traps (syscalls), exceptions and interrupts (IRQs in Intel terminology).   
-
-Lab2 (3 basic labs+2 challenge labs): memory management.
-
-Lab3 (3 basic labs+2 challenge labs): processes.
-
-Lab4 (3 basic labs): device and file (conducted on a PYNQ FPGA board + an Arduino toy car).
-
-The experiments in the REPO may be different (with more actual labs) from the above list with the passing of time.
-
-From the angle of education on Operating System Engineering, different from many famous OS educational projects (like [xv6](https://pdos.csail.mit.edu/6.828/2020/xv6.html) (JOS when earlier) used in MIT 6.828 and [ucore](https://github.com/oscourse-tsinghua/ucore-rv) taught in Tsinghua University) that use complete or near-complete OS kernels containing almost everything like process management, file systems and many other modules, *PKE is **NOT** a complete OS kernel (actually, PKE never intends to be one of them.)*. 
-
-
-PKE is built around the idea of Proxy Kernel (proposed in [PK](https://github.com/riscv/riscv-pk), an open source project of the RISC-V software ecology), that emphasizes to construct a "just-enough" OS kernel for a given application. With such an idea, we design a series of labs in PKE that gradually "upgrades" the OS kernel by giving a set of applications, from simple to complex. During the upgradations, you can learn more and more sophisticated ideas of modern operating systems, and more importantly, play with them by following the labs, one after another. 
-
-
-In each lab, PKE starts with an application (placed in the *./user/* folder, with the "app_" prefix) and an *incomplete* proxy OS kernel. During the lab, you need to 1) understand the interaction between application and proxy OS kernel (sometimes, also the RISC-V machine emulated by using [Spike](https://github.com/riscv/riscv-isa-sim), or an FPGA board with a soft RISC-V core); 2) follow the code from the given application to the OS kernel based on the understanding; 3) complete the proxy OS kernel to make the application (or the system) to execute correctly and smoothly.       
-
-
-In the labs of PKE, we tried our best to control and minimize the code scale of each lab, hoping to help you to stay focus on the key components of Operating System, and minimize the efforts at the same time. [Contact us](mailto:zyshao@hust.edu.cn) if you have further suggestions on reducing the code scale, thanks in advance! 
-
-
-Environment configuration  
-----------
-
-**1. Install Operating system (Virtual machine or Windows Subversion Linux)**
-
-(preferred) Ubuntu 16.04LTS or higher, 64-bit
-
-**2. Install tools for building cross-compiler and emluator** 
-
-```bash
-$ sudo apt-get install autoconf automake autotools-dev curl python3 libmpc-dev libmpfr-dev libgmp-dev gawk build-essential bison flex
-```
-
-**3. Install RISC-V cross-compiler**
-
-```bash
-$ export RISCV=/path-to-install-RISCV-toolchains
-$ git clone --recursive https://github.com/riscv/riscv-gnu-toolchain.git
-$ cd riscv-gnu-toolchain
-$ ./configure --prefix=$RISCV
-$ make -j$(nproc)
-$ sudo make install
-```
-
-In above commands, *$(nproc)* stands for the number of threads you want to invoke during building. Generelly, *$(nproc)* should equal to the number of cores that your computer have. After this step, you should find executables, like riscv64-unknown-elf-gcc, riscv64-unknown-elf-gdb, riscv64-unknown-elf-objdump, and many others (with the name prefix of "riscv64-unknown-elf-") in your */path-to-install-RISCV-toolchains/bin* directory.
-
-**4. Install emulator (Spike)**
-
-```bash
-$ sudo apt-get install device-tree-compiler
-$ git clone https://github.com/riscv/riscv-isa-sim.git
-$ cd riscv-isa-sim
-$ mkdir build
-$ cd build
-$ ../configure --prefix=$RISCV
-$ make -j$(nproc)
-$ sudo make install
-```
-
-After this step, you should find executables like spike, spike-dasm in your */path-to-install-RISCV-toolchains/bin* directory. 
-
-**5. Clone PKE REPO**
-
-```bash
-$ git clone https://github.com/MrShawCode/riscv-pke.git
-```
-
-After this step, you will have the pke directory containing the PKE labs. 
-
-**6. Build/Run PKE** 
-
-```bash
-$ make [run]
-```
-
-**7. (optional) Install OpenOCD for debugging**
-
-```bash
-$ git clone https://github.com/riscv/riscv-openocd.git
-$ cd openocd
-$ ./bootstrap (when building from the git repository) 
-$ ./configure --prefix=$RISCV 
-$ make -j$(nproc)
-$ sudo make install 
-```
-
-After installing OpenOCD, you can debug the PKE kernel. Simply use following command: 
-
-```bash
-$ make gdb
-```
-
-Start the first lab  
-----------
-
-In this lab, we are going to learn the basic priciples of trap (also called as the **syscall** in many textbooks).
-
-A trap (for example, *printf* that is in our daily use) is generally issued by an application, and evetually handled by the kernel. It is very important for an OS to provide such facility, since applications running in less priviledged modes (e.g., User-mode in RISC-V) need to frequently perform legal operations like I/Os that require to be conducted in higher priviledge modes (e.g., Supervisor or Machine modes in RISC-V). 
-
-Lab1_1 gives an application in "user/lab1_1_helloworld.c", whose main() function calls a function *printu* that has the same functionality as *printf*, but under a slightly different name. *printu* is defined in "user/do_print.c", and actually invokes the trap by the *ecall* instruction (see the inline assemblies in the function of *do_user_print*).          
-
-
-#### Code structure of Lab1_1
-----------
-The structure of Lab1_1 is listed in the following:
-
-    .
-    ├── LICENSE.txt
-    ├── Makefile
-    ├── README.md
-    ├── .spike.cfg
-    ├── kernel
-    │   ├── config.h
-    │   ├── elf.c
-    │   ├── elf.h
-    │   ├── kernel.c
-    │   ├── kernel.lds
-    │   ├── machine
-    │   │   ├── mentry.S
-    │   │   └── minit.c
-    │   ├── process.c
-    │   ├── process.h
-    │   ├── riscv.h
-    │   ├── strap.c
-    │   ├── strap.h
-    │   ├── strap_vector.S
-    │   ├── syscall.c
-    │   └── syscall.h
-    ├── spike_interface
-    │   ├── atomic.h
-    │   ├── dts_parse.c
-    │   ├── dts_parse.h
-    │   ├── spike_file.c
-    │   ├── spike_file.h
-    │   ├── spike_htif.c
-    │   ├── spike_htif.h
-    │   ├── spike_memory.c
-    │   ├── spike_memory.h
-    │   ├── spike_utils.c
-    │   └── spike_utils.h
-    ├── user
-    │   ├── app_helloworld.c
-    │   ├── user.lds
-    │   ├── user_lib.c
-    │   └── user_lib.h
-    └── util
-        ├── functions.h
-        ├── load_store.S
-        ├── snprintf.c
-        ├── snprintf.h
-        ├── string.c
-        ├── string.h
-        └── types.h
-
-The root directory mainly contains the documents (i.e., the md files), the license text and importantly, the make file (named as *Makefile*). The *kernel* sub-directory contains the OS kernel, while the *user* sub-directory contains the given application (in *app_helloworld.c*) as well as the source-code files containing the supporting routings, which should be placed in the user library in full-pledged OS like Linux.
-
-To understand the PKE OS kernel (of Lab1_1) and accomplish the lab, you should start from the given application. Therefore, we start the tourism from *user/app_helloworld.c*:          
-
-```C
-  1 /*
-  2  * Below is the given application for lab1_1.
-  3  *
-  4  * You can build this app (as well as our PKE OS kernel) by command:
-  5  * $ make
-  6  *
-  7  * Or run this app (with the support from PKE OS kernel) by command:
-  8  * $ make run
-  9  */
- 10
- 11 #include "user_lib.h"
- 12
- 13 int main(void) {
- 14   printu("Hello world!\n");
- 15
- 16   exit(0);
- 17 }
-```
-
-From the code, we can observe that there is a newly defined function called *printu*, whose functionality equals to *printf* of our daily use. The reason we define a new function instead of using *printf* is that *printf* is already defined in the newlib of the RISC-V cross-compiling tool chain.
-
-The prototype and implementation of *printu* can be found in *user/user.h* and *user/do_print.c* respectively.      
-
-Switching to next stage 
-----------
-
-After having finished a lab (and committed your solution), you can continue the practicing of following labs. For example, after finishing lab1_1, you can commit your solution by:
-
-```bash
-$ git commit -a -m "your comments to lab1_1"
-```
-
-then, switch to next lab (lab1_2) by:
-
-```bash
-$ git checkout lab1_2_exception
-```
-
-and merge your solution in previous lab by:
-
-```bash
-$ git merge lab1_1_syscall -m "continue lab1_2"
-```
-
-After all these, you can proceed to work on lab1_2. 
-
-**Note**: Never merge challenge labs, such as lab1_challenge1_backtrace, lab2_challenge1_pagefaults, etc. 
+**首先明确我们需要做什么，由于没有此系统调用，所以我们肯定要添加系统调用，并完善相关路径。其次在调用函数中，我们需要获取用户程序的栈，才能追溯到函数的返回地址，要注意的是，系统调用时会切换到S模式的用户内核栈，但我们需要在用户栈上寻找。最后找到返回地址后，需要将虚拟地址转换成源程序中的符号，由文档可知该内容与ELF文件的symtab section和strtab seciton有关。**
 
 
 
-That's all. Hope you enjoy!
+## 添加系统调用
 
+- 首先在user_lib.h文件中添加print_backtrace()函数原型，完成函数声明
+
+  ```
+  int printu(const char *s, ...);
+  int exit(int code);
+  //added
+  int print_backtrace(int depth);
+  ```
+
+- 然后在user_lib.c文件中完成该函数的实现，仿照printu和exit，此处转化为对do_user_call()的调用即可
+
+  ```
+   int print_backtrace(int depth) {
+      return do_user_call(SYS_user_backtrace, depth, 0, 0, 0, 0, 0, 0);
+    }
+  ```
+
+- 因为需要告诉do_user_call系统调用号，所以需要添加宏，找到syscall.h往里添加：
+
+  ```
+  #define SYS_user_backtrace (SYS_user_base + 2)  //与前两个不同即可
+  ```
+
+- 然后就是do_user_call中ecall指令使机器转到trap处理入口smode_trap_vecotr，再调用smode_trap_handler()函数，判断为系统调用后，转而调用handle_syscall()函数，进一步调用do_syscall()函数，其实调用过程与lab1_1_syscall一致，所以我们在do_syscall中添加sys_user_backtrace()函数到switch分支即可：
+
+  ```
+  long do_syscall(long a0, long a1, long a2, long a3, long a4, long a5, long a6, long a7) {
+    switch (a0) {
+      case SYS_user_print:
+        return sys_user_print((const char*)a1, a2);
+      case SYS_user_exit:
+        return sys_user_exit(a1);
+      case SYS_user_backtrace:
+        return sys_user_backtrace(a1);  //a1就是depth
+      default:
+        panic("Unknown syscall %ld \n", a0);
+    }
+  ```
+
+- 到此系统调用添加完成，接来下要完善系统调用具体内容
+
+  
+
+## 获取用户栈和函数返回地址
+
+- f1到f8和print_backtrace的被调用时系统处于用户态，所以他们会在用户栈上操作。print_backtrace调用的do_user_call()会通过ecall指令使系统陷入S态，所以此时转到用户内核栈上操作。我们可以通过`riscv64-unknown-elf-objdump -d obj/app_print_backtrace`来查看该程序的汇编代码，可以发现f1到f8函数代码基本一致：
+
+  ```
+  000000008100008e <f1>:
+      8100008e:	1141                	addi	sp,sp,-16
+      81000090:	e406                	sd	ra,8(sp)
+      81000092:	e022                	sd	s0,0(sp)
+      81000094:	0800                	addi	s0,sp,16
+      81000096:	fe5ff0ef          	jal	ra,8100007a <f2>
+      8100009a:	60a2                	ld	ra,8(sp)
+      8100009c:	6402                	ld	s0,0(sp)
+      8100009e:	0141                	addi	sp,sp,16
+      810000a0:	8082                	ret
+  ```
+
+- f1到f8在栈中所占都是16字节，高地8字节存ra，即该函数的返回地址，低字节存s0，指向调用该函数的函数返回地址。print_backtrace同样占16字节。特别注意用户态函数do_user_call，他开辟了32字节：
+
+  ```
+  00000000810000ca <do_user_call>:
+      810000ca:	1101                	addi	sp,sp,-32
+      810000cc:	ec22                	sd	s0,24(sp)
+      810000ce:	1000                	addi	s0,sp,32
+      810000d0:	00000073          	ecall
+  ```
+
+- 随后调用ecall进入s态
+
+- 所以我们首先令sp+24指向第一个fp，然后循环+16即可得到之前所有函数的返回地址，**注意这个返回地址是调用该函数的指令的下一条指令的地址，而我们后面需要解析的是函数的首地址**
+
+  ```
+   uint64 user_sp = current->trapframe->regs.sp+24;
+     int64 actual_depth=0;
+    for (uint64 p = user_sp; actual_depth<depth; ++actual_depth, p += 16)
+  \
+  将虚拟地址转化为源符号部分
+  \
+  ```
+
+  
+
+## symtab section and strtab section 处理
