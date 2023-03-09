@@ -195,7 +195,24 @@
 # 记录
 
 - 首先还是函数首地址和返回地址的问题
+  以f8为例，通过上面的symtab section的value可以看出其首地址为81000000，但如果我们在sys_user_backtrace打印f8返回地址可以发现其地址为8100000e，查看汇编代码即可理解：
 
+  ```
+  0000000081000000 <f8>:
+      81000000:	1141                	addi	sp,sp,-16
+      81000002:	e406                	sd	ra,8(sp)
+      81000004:	e022                	sd	s0,0(sp)
+      81000006:	0800                	addi	s0,sp,16
+      81000008:	451d                	li	a0,7
+      8100000a:	160000ef          	jal	ra,8100016a <print_backtrace>
+      8100000e:	60a2                	ld	ra,8(sp)
+      81000010:	6402                	ld	s0,0(sp)
+      81000012:	0141                	addi	sp,sp,16
+      81000014:	8082                	ret
   
+  ```
+
+  很明显，8100000e就是调用函数指令的下一条指令的地址，这也符合系统调用的规则。
 
 - 第二是个print_backtrace一开始无法打印的问题
+  这里折磨了很久，一开始一直打印vsnprintf。后来发现问题，f1到f8函数存放的地址是8100008e到8100000，其中f1是高地址，f8是低地址，然后在symtab中我们发现print_backtrace的地址是8100016a，而vsnprintf的地址是81000190。而在backtrace_symbol我们一开始的逻辑是，传入的函数返回地址大于函数的首地址，并且本函数的返回地址会大于上个函数的返回地址，这样对于f1到f8是没问题的，传入函数返回地址都可以正确取出相应的name，但对于print_backtrace不行，当我们传入print_backtrace的返回地址时，因为在symtab中会先遍历到vsnprintf，并且此时vsnprinf的函数首地址满足该循环逻辑！所以取出的name是vsnprinf。所以我在循环逻辑中加了一句`elfloader.syms[i].st_size != 514`来防止vsnprinf满足条件，其他条件亦可。
