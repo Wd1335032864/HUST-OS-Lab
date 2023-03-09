@@ -82,8 +82,8 @@
 
   ```
    uint64 user_sp = current->trapframe->regs.sp+24;
-     int64 actual_depth=0;
-    for (uint64 p = user_sp; actual_depth<depth; ++actual_depth, p += 16)
+     int64 Depth=0;
+    for (uint64 p = user_sp; Depth<depth; ++Depth, p += 16)
   \
   将虚拟地址转化为源符号部分
   \
@@ -92,3 +92,100 @@
   
 
 ## symtab section and strtab section 处理
+
+- 其实就是读取两个section的内容，并理清楚两者关系。首先在linux源代码中的elf.h文件中获取symtab的符号结构，后续需要读取，所以添加到elf.h中：
+
+  ```
+  typedef struct {
+     uint32 st_name;         /* Symbol name (string tbl index) */
+     unsigned char st_info;  /* Symbol type and binding */ 
+     unsigned char st_other; /* Symbol visibility */
+     uint16 st_shndx;        /* Section index */
+     uint64 st_value;        /* Symbol value */
+     uint64 st_size;         /* Symbol size */
+   } elf_symbol_rec;
+  ```
+
+- 由文档可知st_name可能是相对于某一个地址的偏移，我们通过相关指令观察两个section的内容：
+  ![image-20230309102036591](image-20230309102036591.png)
+  ![image-20230309102054045](image-20230309102054045.png)
+
+- 其中strtab是被00分开的。我们可以通过将name按整形打印出来观察，便可发现一定规律。拿vsnprintf举例，它按整形打印的结果是45，随后我们发现在strtab中，45之后便是vsnprintf符号，即strtab[45]="vsnprintf"。所以可以理解symtab中的name是怎么作为strtab的索引的了。
+
+- 随后我们需要读取两个section的内容，首先需要修改存储文件上下文结构体elf_ctx_t的定义，让其能存储我们我需要的信息，即strtab和symtab内容：
+
+  ```
+  typedef struct elf_ctx_t {
+    void *info;
+    elf_header ehdr;
+  
+    char strtab[999];     //存放strtab中的字符串
+    elf_symbol_rec syms[999];   //保存symtab每一个symbol的内容
+    uint64 syms_count;       //记录symbol的的count，方便后续遍历
+  } elf_ctx;
+  ```
+
+- 再是读取内容：
+
+  ```
+  elf_status elf_load_symbol(elf_ctx *ctx) {
+    elf_section_header sh;
+    int i, off;
+    for (int i = 0, off = ctx->ehdr.shoff; i < ctx->ehdr.shnum; 
+      ++i, off += sizeof(elf_section_header)) {
+      if (elf_fpread(ctx, (void *)&sh, sizeof(sh), off) != sizeof(sh)) return EL_EIO;
+      if (sh.sh_type == SHT_SYMTAB) {  
+        if (elf_fpread(ctx, &ctx->syms, sh.sh_size, sh.sh_offset) != sh.sh_size)
+          return EL_EIO;
+        ctx->syms_count = sh.sh_size / sizeof(elf_symbol_rec);  
+      } else if (sh.sh_type == SHT_STRTAB) {  
+        if (elf_fpread(ctx, &ctx->strtab, sh.sh_size, sh.sh_offset) != sh.sh_size)
+          return EL_EIO;
+  		else  break; //因为之后还有string table ，防止覆盖strtab内容
+      }
+    }
+    return EL_OK;
+  }
+  
+  ```
+
+- 到此文件读取函数定义完成，因为kernel.c文件中的函数load_user_program函数中通过load_bincode_from_host函数完成文件装载，所以我们还需要将elf_load_symbol添加到load_bincode_from_host函数中：
+
+  ```
+  void load_bincode_from_host_elf(process *p) {
+  ……
+  if (elf_load_symbol(&elfloader) != EL_OK) panic("fail to load elf symbols.\n");    //elfloader可在文件中定义
+  ……
+  }
+  ```
+
+-  此时进程已完成文件装载，所以我们再回到syscall.c中来处理我们的sys_user_backtrace函数，当然前提是添加头文件`#include "elf.h"`和`extern elf_ctx elfloader;`来取用我们所需要的section。
+
+  ```
+  int backtrace_symbol(uint64 ad) {
+    uint64 t = 0;
+    int idx = -1;
+    for (int i = 0; i < elfloader.syms_count; ++i) {
+      if ((elfloader.syms[i].st_info == STT_FUNC && elfloader.syms[i].st_size != 514 && elfloader.syms[i].st_value < ad && elfloader.syms[i].st_value >t) ) {    //后续解释elfloader.syms[i].st_size != 514
+  	t = elfloader.syms[i].st_value; 
+        idx = i;
+      }
+    }
+    return idx;
+  }
+  
+  ssize_t sys_user_backtrace(int64 depth) {
+      uint64 user_sp = current->trapframe->regs.sp+24;
+     int64 Depth=0;
+    for (uint64 p = user_sp; actual_depth<depth; Depth, p += 16) {
+     if (*(uint64*)p == 0) continue;
+        int symbol_idx = backtrace_symbol(*(uint64*)p);
+       if (symbol_idx == -1) {
+          sprint("fail to backtrace symbol %lx\n", *(uint64*)p);
+          continue;
+        }
+        sprint("%s\n", &elfloader.strtab[elfloader.syms[symbol_idx].st_name]);
+  ```
+
+- 仅需注意symtab中的value是函数的首地址，而我们sp指向的是函数返回地址。
+
