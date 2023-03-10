@@ -53,7 +53,20 @@ typedef enum elf_status_t {
 typedef struct elf_ctx_t {
   void *info;
   elf_header ehdr;
+
+  char strtab[999];     //存放strtab中的字符串
+  elf_symbol_rec syms[999];   //保存symtab每一个symbol的内容
+  uint64 syms_count;       //记录symbol的的count，方便后续遍历
 } elf_ctx;
+
+typedef struct {
+   uint32 st_name;         /* Symbol name (string tbl index) */
+   unsigned char st_info;  /* Symbol type and binding */ 
+   unsigned char st_other; /* Symbol visibility */
+   uint16 st_shndx;        /* Section index */
+   uint64 st_value;        /* Symbol value */
+   uint64 st_size;         /* Symbol size */
+ } elf_symbol_rec;
 
 elf_status elf_init(elf_ctx *ctx, void *info);
 elf_status elf_load(elf_ctx *ctx);

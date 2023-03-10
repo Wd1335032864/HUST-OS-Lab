@@ -75,6 +75,26 @@ elf_status elf_load(elf_ctx *ctx) {
   return EL_OK;
 }
 
+elf_status elf_load_symbol(elf_ctx *ctx) {
+  elf_section_header sh;
+  int i, off;
+  for (int i = 0, off = ctx->ehdr.shoff; i < ctx->ehdr.shnum; 
+    ++i, off += sizeof(elf_section_header)) {
+    if (elf_fpread(ctx, (void *)&sh, sizeof(sh), off) != sizeof(sh)) return EL_EIO;
+    if (sh.sh_type == SHT_SYMTAB) {  
+      if (elf_fpread(ctx, &ctx->syms, sh.sh_size, sh.sh_offset) != sh.sh_size)
+        return EL_EIO;
+      ctx->syms_count = sh.sh_size / sizeof(elf_symbol_rec);  
+    } else if (sh.sh_type == SHT_STRTAB) {  
+      if (elf_fpread(ctx, &ctx->strtab, sh.sh_size, sh.sh_offset) != sh.sh_size)
+        return EL_EIO;
+		else  break; //因为之后还有string table ，防止覆盖strtab内容
+    }
+  }
+  return EL_OK;
+}
+
+
 typedef union {
   uint64 buf[MAX_CMDLINE_ARGS];
   char *argv[MAX_CMDLINE_ARGS];
@@ -129,6 +149,9 @@ void load_bincode_from_host_elf(process *p) {
 
   // load elf. elf_load() is defined above.
   if (elf_load(&elfloader) != EL_OK) panic("Fail on loading elf.\n");
+
+if (elf_load_symbol(&elfloader) != EL_OK) 
+panic("fail to load elf symbols.\n");    //elfloader可在文件中定义
 
   // entry (virtual, also physical in lab1_x) address
   p->trapframe->epc = elfloader.ehdr.entry;
