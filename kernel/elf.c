@@ -198,11 +198,8 @@ endop:;
 // load the elf segments to memory regions as we are in Bare mode in lab1
 //
 elf_status elf_load(elf_ctx *ctx) {
-  // elf_prog_header structure is defined in kernel/elf.h
   elf_prog_header ph_addr;
-  int i, off;
-
-  // traverse the elf program segment headers
+  int i, off; 
   for (i = 0, off = ctx->ehdr.phoff; i < ctx->ehdr.phnum; i++, off += sizeof(ph_addr)) {
     // read segment headers
     if (elf_fpread(ctx, (void *)&ph_addr, sizeof(ph_addr), off) != sizeof(ph_addr)) return EL_EIO;
@@ -211,13 +208,31 @@ elf_status elf_load(elf_ctx *ctx) {
     if (ph_addr.memsz < ph_addr.filesz) return EL_ERR;
     if (ph_addr.vaddr + ph_addr.memsz < ph_addr.vaddr) return EL_ERR;
 
-    // allocate memory block before elf loading
+    // allocate memory before loading
     void *dest = elf_alloc_mb(ctx, ph_addr.vaddr, ph_addr.vaddr, ph_addr.memsz);
 
     // actual loading
     if (elf_fpread(ctx, dest, ph_addr.memsz, ph_addr.off) != ph_addr.memsz)
       return EL_EIO;
   }
+	uint64 debug_line;
+	debug_line = ph_addr.vaddr + ph_addr.memsz;	
+  char name[9999];
+  elf_sect_header tmp_seg,name_seg;
+
+  if (elf_fpread(ctx, (void *)&name_seg, sizeof(name_seg),
+              ctx->ehdr.shoff + ctx->ehdr.shstrndx * sizeof(name_seg)) != sizeof(name_seg)) return EL_EIO;
+  if (elf_fpread(ctx,(void *)name,name_seg.size,name_seg.offset) != name_seg.size) return EL_EIO;
+
+  for (i = 0, off = ctx->ehdr.shoff; i < ctx->ehdr.shnum; i++, off += sizeof(tmp_seg)) {
+      if (elf_fpread(ctx, (void *)&tmp_seg, sizeof(tmp_seg), off) != sizeof(tmp_seg)) return EL_EIO;
+      if (strcmp(&name[tmp_seg.name], ".debug_line") == 0) {
+          if (elf_fpread(ctx, (void *)debug_line, tmp_seg.size, tmp_seg.offset) != tmp_seg.size) return EL_EIO;
+          make_addr_line(ctx, (char *)debug_line, tmp_seg.size); break;
+      }
+  }
+  return EL_OK;
+}
 
   return EL_OK;
 }

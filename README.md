@@ -1,93 +1,168 @@
-<<<<<<< HEAD
 # lab1_challenge2_errorline
-=======
-# Lab1_3_irq
+**文档过程说的比较详细，首先我们找到debug_line段，将其内容保存，然后利用make_addr_line函数去解析，由于该函数已经实现，我们调用即可。调用结束后，process结构体的dir、file、line三个指针会各指向一个数组。读取相关数组内容并打印内容即可。**
 
-- 继承lab1_2以及之前的答案
+## 读取debug_line段中调试信息
 
 ```
-git merge lab1_2_exception -m "continue to work on lab1_3"
+  elf_status elf_load(elf_ctx *ctx) {
+  elf_prog_header ph_addr;
+  int i, off; 
+  for (i = 0, off = ctx->ehdr.phoff; i < ctx->ehdr.phnum; i++, off += sizeof(ph_addr)) {
+    // read segment headers
+    if (elf_fpread(ctx, (void *)&ph_addr, sizeof(ph_addr), off) != sizeof(ph_addr)) return EL_EIO;
+
+    if (ph_addr.type != ELF_PROG_LOAD) continue;
+    if (ph_addr.memsz < ph_addr.filesz) return EL_ERR;
+    if (ph_addr.vaddr + ph_addr.memsz < ph_addr.vaddr) return EL_ERR;
+
+    // allocate memory before loading
+    void *dest = elf_alloc_mb(ctx, ph_addr.vaddr, ph_addr.vaddr, ph_addr.memsz);
+
+    // actual loading
+    if (elf_fpread(ctx, dest, ph_addr.memsz, ph_addr.off) != ph_addr.memsz)
+      return EL_EIO;
+  }
+	uint64 debug_line;
+	debug_line = ph_addr.vaddr + ph_addr.memsz;	
+  char name[9999];
+  elf_sect_header tmp_seg,name_seg;
+
+  if (elf_fpread(ctx, (void *)&name_seg, sizeof(name_seg),
+              ctx->ehdr.shoff + ctx->ehdr.shstrndx * sizeof(name_seg)) != sizeof(name_seg)) return EL_EIO;
+  if (elf_fpread(ctx,(void *)name,name_seg.size,name_seg.offset) != name_seg.size) return EL_EIO;
+
+  for (i = 0, off = ctx->ehdr.shoff; i < ctx->ehdr.shnum; i++, off += sizeof(tmp_seg)) {
+      if (elf_fpread(ctx, (void *)&tmp_seg, sizeof(tmp_seg), off) != sizeof(tmp_seg)) return EL_EIO;
+      if (strcmp(&name[tmp_seg.name], ".debug_line") == 0) {
+          if (elf_fpread(ctx, (void *)debug_line, tmp_seg.size, tmp_seg.offset) != tmp_seg.size) return EL_EIO;
+          make_addr_line(ctx, (char *)debug_line, tmp_seg.size); break;
+      }
+  }
+  return EL_OK;
+}
 ```
 
-- 首先由文档知道时钟中断也是在机器模式下触发，所以和lab1_2一样最终会进入到handle_mtrap函数继进行理，通过对mcause的值判断后确认是CAUSE_MTIMER后调用handle_timer()函数进行进一步处理。
+- 之所以在elf_load中实现是为了把debug_line段直接放在程序所有需映射的段数据之后，保证有足够的动态空间来存放dir、file、line三个数组。因为elf_load要装载segment，所以我们直接取用循环后的ph_addr.vaddr+ph_addr.memsz即可。也可以利用section来获取需映射的段数据的最大虚拟地址，但这样后续读取section就会多几次循环。如此就能找到debug_line就break
 
-- 而m_start中新增的timerinit()函数则是定义了下次timer触发的时间，具体定义：
+- 与找symtab和strtab不同的是找debug_line不能通过type来找，观察section header就知道有=还存在许多type为PROGBITS的section，所以这里是采用name的对比来找debug_line
+
+- make_addr_line函数调用结束后，process结构体的dir、file、line三个指针会各指向一个数组，我们观察process的结构体：
 
   ```
-  void timerinit(uintptr_t hartid) {
-    // fire timer irq after TIMER_INTERVAL from now.
-    *(uint64*)CLINT_MTIMECMP(hartid) = *(uint64*)CLINT_MTIME + TIMER_INTERVAL;
+  typedef struct process_t {
+    // pointing to the stack used in trap handling.
+    uint64 kstack;
+    // trapframe storing the context of a (User mode) process.
+    trapframe* trapframe;
   
-    // enable machine-mode timer irq in MIE (Machine Interrupt Enable) csr.
-    write_csr(mie, read_csr(mie) | MIE_MTIE);
+    char *debugline; char **dir; code_file *file; addr_line *line; int line_ind;
+  }process;
+  ```
+
+- 观察make_addr_line可知，debugline存放debug_line的地址，和line_ind存放代码文件的代码总行数
+
+- 
+  dir数组存储所有代码文件的文件夹路径字符串指针
+
+- file数组存储所有代码文件的文件名字符串指针以及其文件夹路径在dir数组中的索引：
+
+  ```
+  typedef struct {
+      uint64 dir; char *file;
+  } code_file;
+  ```
+
+- line数组存储所有指令地址，代码行号，文件名在file数组中的索引三者的映射关系
+
+  ```
+  typedef struct {
+      uint64 addr, line, file;
+  } addr_line;
+  ```
+
+  
+
+## 中断处理
+
+- 通过对bug_line的解析，我们现在已经有了所有代码文件的文件夹路径和文件名、指令地址和代码行的映射关系。接下来我们还需要找到引出异常的那条指令的地址。通过文档可知，在M态下，mepc寄存器存放着发生异常的那条指令的地址。我们可以通过映射关系找到其具体路径然后进行打印：
+
+  ```
+  	char path[200], code[10000];
+  void error_print() {
+        uint64 mepc = read_csr(mepc);
+        for (int i = 0; i < current->line_ind; i++) {
+            if (mepc < current->line[i].addr) { //一行代码可能对应多条指令
+      addr_line *line = &current->line[i-1];
+      int l = strlen(current->dir[current->file[line->file].dir]); 
+      strcpy(path, current->dir[current->file[line->file].dir]);  //利用索引寻找
+      path[l] = '/';
+      strcpy(path + l + 1, current->file[line->file].file);
+      
+      spike_file_t *f = spike_file_open(path, O_RDONLY, 0);
+      spike_file_read(f, code, 10000);
+      spike_file_close(f); int off = 0, cnt = 1;
+      while (off < 10000) {
+          int x = off; while (x < 10000 && code[x] != '\n') x++;
+          if (cnt == line->line) {
+              code[x] = '\0';
+              sprint("Runtime error at %s:%d\n%s\n", path, line->line, code+off);
+              break;
+          } 
+  	else { cnt++; off = x + 1;}
+      }
+  			 break;
+            }
+        }
   }
   ```
 
-- 第二行是允许我们在M模式下处理timer中断
-
-- 再回到handle_timer()函数：
-
-  ```
-  static void handle_timer() {
-    int cpuid = 0;
-    // setup the timer fired at next time (TIMER_INTERVAL from now)
-    *(uint64*)CLINT_MTIMECMP(cpuid) = *(uint64*)CLINT_MTIMECMP(cpuid) + TIMER_INTERVAL;
   
-    // setup a soft interrupt in sip (S-mode Interrupt Pending) to be handled in S-mode
-    write_csr(sip, SIP_SSIP);
-  }
-  ```
 
-- 可以发现它会在中断发生后，再次设置timer的触发时间，即当前时间+TIMER_INTERVAL。需要注意的是这里第二行对SIP寄存器的SIP_SSIP位进行设置，会导致PKE操作系统内核在S模式收到一个来自M态的时钟中断请求，所以直接转入S态的trap处理函数入口smode_trap_vector，然后调用smode_trap_handler()函数 
+## 中断路径完善
+
+- 由于最终测试时内核也应能够对其他会导致panic的异常和其他源文件输出正确的结果，所以在M态所有需要打印异常代码行的case下调用error_print函数：
 
   ```
-  if (cause == CAUSE_USER_ECALL) {
-      handle_syscall(current->trapframe);
-    } else if (cause == CAUSE_MTIMER_S_TRAP) {  //soft trap generated by timer interrupt in M mode
-      handle_mtimer_trap();
-    } else {
-      sprint("smode_trap_handler(): unexpected scause %p\n", read_csr(scause));
-      sprint("            sepc=%p stval=%p\n", read_csr(sepc), read_csr(stval));
-      panic( "unexpected exception happened.\n" );
+  void handle_mtrap() {
+    uint64 mcause = read_csr(mcause);
+    switch (mcause) {
+      case CAUSE_MTIMER:
+        handle_timer();
+        break;
+      case CAUSE_FETCH_ACCESS:
+        error_print();
+        handle_instruction_access_fault();
+        break;
+      case CAUSE_LOAD_ACCESS:
+        error_print();
+        handle_load_access_fault();
+      case CAUSE_STORE_ACCESS:
+        error_print();
+        handle_store_access_fault();
+        break;
+      case CAUSE_ILLEGAL_INSTRUCTION:
+        // TODO (lab1_2): call handle_illegal_instruction to implement illegal instruction
+        // interception, and finish lab1_2.
+        error_print();
+        handle_illegal_instruction();
+  
+        break;
+      case CAUSE_MISALIGNED_LOAD:
+        error_print();
+        handle_misaligned_load();
+        break;
+      case CAUSE_MISALIGNED_STORE:
+        error_print();
+        handle_misaligned_store();
+        break;
+  
+      default:
+        sprint("machine trap(): unexpected mscause %p\n", mcause);
+        sprint("            mepc=%p mtval=%p\n", read_csr(mepc), read_csr(mtval));
+        panic( "unexpected exception happened in M-mode.\n" );
+        break;
     }
-  
-  ```
-
-- 与lab1_1一样，读取scause寄存器内容判断中断类型，如果内容等于CAUSE_MTIMER_S_TRAP的话，说明是M态传递上来的时钟中断动作，就调用handle_mtimer_trap()函数进行处理
-
-- 再观察handle_mtimer_trap():
-
-  ```
-  static uint64 g_ticks = 0;
-  void handle_mtimer_trap() {
-    sprint("Ticks %d\n", g_ticks);
-    // TODO (lab1_3): increase g_ticks to record this "tick", and then clear the "SIP"
-    // field in sip register.
-    // hint: use write_csr to disable the SIP_SSIP bit in sip.
-    panic( "lab1_3: increase g_ticks by one, and clear SIP field in sip register.\n" );
-  
-  }
-  ```
-
-- 将通过之前不正确的输出可以知道g_ticks是输出中断次数，所以每次调用该函数需要使其加一。因为该程序在一次时钟中断后还要继续运行，所以我们需要将SIP寄存器中的SIP_SSIP位置零，让我们的模拟RISC-V机器不再处于中断状态，以便S态能继续处理下次时钟中断时M态传来的时钟中断请求
-
-- 最终修改为：
-
-  ```
-  void handle_mtimer_trap() {
-    sprint("Ticks %d\n", g_ticks);
-    // TODO (lab1_3): increase g_ticks to record this "tick", and then clear the "SIP"
-    // field in sip register.
-    // hint: use write_csr to disable the SIP_SSIP bit in sip.
-  	g_ticks++;
-  	write_csr(sip,0);
   }
   ```
 
   
-
-# 记录
-
-为何不在M态完整处理时钟中断：
-根据文档：对于一个操作系统来说，timer事件对它的意义在于，它是标记时间片的重要（甚至是唯一）手段，而将CPU事件分成若干时间片的作用很大程度上是为了做进程的调度，同时，操作系统的功能大多数是在S态完成的。如果在M态处理时钟中断，虽然说特权级上允许这样的操作，但是处于M态的程序可能并不是非常清楚S态的操作系统的状态。如果贸然采取动作，可能会破坏操作系统本身的设计。
->>>>>>> lab1_3_irq
